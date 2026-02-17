@@ -4,14 +4,11 @@ workflows:
     max_build_duration: 60
     environment:
       vars:
-        # ── Set these in Codemagic Environment Variables (mark secrets as secure) ──
-        TARGET_BUNDLE_ID: "com.example.targetapp"   # <-- change to your target app
-        # IPA_URL: https://your-server.com/app.ipa  # optional: download IPA from URL
+        TARGET_BUNDLE_ID: "com.example.targetapp"
       xcode: latest
       cocoapods: default
 
     scripts:
-      # ── 1. Install Theos ──
       - name: Install Theos
         script: |
           set -e
@@ -21,13 +18,11 @@ workflows:
           fi
           echo "THEOS=$HOME/theos" >> $CM_ENV
 
-      # ── 2. Install build tools ──
       - name: Install inject_dylib & optool
         script: |
           set -e
           brew install ldid 2>/dev/null || true
 
-          # Build insert_dylib from source
           if ! command -v insert_dylib &>/dev/null; then
             git clone https://github.com/tyilo/insert_dylib.git /tmp/insert_dylib
             cd /tmp/insert_dylib
@@ -35,47 +30,31 @@ workflows:
             cp /tmp/insert_dylib/build/Release/insert_dylib /usr/local/bin/
           fi
 
-      # ── 3. Build the Dylib with Theos ──
       - name: Build Dylib
         script: |
           set -e
           export THEOS=$HOME/theos
+          export THEOS_MAKE_PATH=$THEOS/makefiles
           cd $CM_BUILD_DIR
-          make clean
-          make -j$(sysctl -n hw.ncpu) 2>&1
+          make -j$(sysctl -n hw.ncpu) 2>&1 || make 2>&1
           echo "[*] Built artifacts:"
           find . -name "*.dylib" | head -10
 
-      # ── 4. (Optional) Download target IPA ──
-      # Uncomment this block if you want to download the IPA automatically.
-      # Otherwise, upload the IPA as a Codemagic build artifact input.
-      #
-      # - name: Download IPA
-      #   script: |
-      #     curl -L "$IPA_URL" -o target.ipa
-
-      # ── 5. Inject dylib into IPA ──
       - name: Inject Dylib into IPA
         script: |
           set -e
           cd $CM_BUILD_DIR
-
-          # Find the compiled dylib
           DYLIB_PATH=$(find . -name "MyTweak.dylib" | head -1)
           echo "[*] Found dylib: $DYLIB_PATH"
-
-          # Find the IPA (uploaded as artifact or placed in repo)
           IPA_PATH=$(find . -name "*.ipa" | grep -v patched | head -1)
           if [ -z "$IPA_PATH" ]; then
               echo "[!] No IPA found. Upload an IPA to your repo root or uncomment the download step."
               exit 1
           fi
           echo "[*] Target IPA: $IPA_PATH"
-
           chmod +x inject.sh
           bash inject.sh "$IPA_PATH" "$DYLIB_PATH"
 
-      # ── 6. Ad-hoc re-sign (no provisioning profile needed for sideloading) ──
       - name: Re-sign IPA (ad-hoc)
         script: |
           set -e
@@ -84,12 +63,8 @@ workflows:
           WORK_DIR=$(mktemp -d)
           unzip -q "$PATCHED_IPA" -d "$WORK_DIR"
           APP_PATH=$(find "$WORK_DIR/Payload" -name "*.app" | head -1)
-
-          # Ad-hoc sign everything in the bundle
           find "$APP_PATH" \( -name "*.dylib" -o -name "*.framework" \) -exec codesign --force --sign - {} \;
           codesign --force --sign - --entitlements /dev/null "$APP_PATH"
-
-          # Repack
           IPA_NAME=$(basename "$PATCHED_IPA")
           cd "$WORK_DIR"
           zip -qr "${OLDPWD}/signed_${IPA_NAME}" Payload
