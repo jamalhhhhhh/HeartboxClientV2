@@ -11,23 +11,20 @@ static UIButton  *gFloatBtn     = nil;
 static BOOL       gMenuVisible  = NO;
 static int        gSpawnAmount  = 1;
 static UILabel   *gAmountLabel  = nil;
-static UIView    *gColorPreview = nil;
-static UIColor   *gPickedColor  = nil;
 static BOOL       gMenuBuilt    = NO;
 
-// ── Passthrough window — lets touches reach the app below ──
+// ── Passthrough window ──
 @interface ACPassthroughWindow : UIWindow
 @end
 @implementation ACPassthroughWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
-    // If hit is our own root vc view or window itself, pass through to app
     if (hit == self.rootViewController.view || hit == nil) return nil;
     return hit;
 }
 @end
 
-// ── Draggable float button ──
+// ── Draggable button ──
 @interface ACDragButton : UIButton
 @property (nonatomic, assign) CGPoint dragStart;
 @property (nonatomic, assign) CGPoint centerStart;
@@ -44,9 +41,9 @@ static BOOL       gMenuBuilt    = NO;
 }
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
-        _dragStart = [pan locationInView:self.superview];
+        _dragStart   = [pan locationInView:self.superview];
         _centerStart = self.center;
-        _didDrag = NO;
+        _didDrag     = NO;
     } else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint cur = [pan locationInView:self.superview];
         CGFloat dx = cur.x - _dragStart.x;
@@ -55,63 +52,42 @@ static BOOL       gMenuBuilt    = NO;
         self.center = CGPointMake(_centerStart.x + dx, _centerStart.y + dy);
     }
 }
-// Only fire tap if we didn't drag
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     if (!_didDrag) [super touchesEnded:touches withEvent:event];
     _didDrag = NO;
 }
 @end
 
-static void photonSpawnItem(NSString *prefabName, int amount) {
+// ── Spawn item_landmine at 0,0,0 ──
+static void spawnLandmine(int amount) {
+    NSString *prefab = @"item_landmine";
     for (int i = 0; i < amount; i++) {
+        // Try PhotonNetwork.Instantiate first
         Class photonNet = NSClassFromString(@"PhotonNetwork");
         if (photonNet) {
             SEL s = NSSelectorFromString(@"Instantiate:position:rotation:");
-            if ([photonNet respondsToSelector:s]) {
+            NSMethodSignature *sig = [photonNet methodSignatureForSelector:s];
+            if (sig) {
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                inv.target   = photonNet;
+                inv.selector = s;
                 float pos[3] = {0.0f, 0.0f, 0.0f};
                 float rot[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-                NSMethodSignature *sig = [photonNet methodSignatureForSelector:s];
-                if (sig) {
-                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                    inv.target = photonNet;
-                    inv.selector = s;
-                    [inv setArgument:&prefabName atIndex:2];
-                    [inv setArgument:&pos atIndex:3];
-                    [inv setArgument:&rot atIndex:4];
-                    [inv invoke];
-                    continue;
-                }
+                [inv setArgument:&prefab atIndex:2];
+                [inv setArgument:&pos    atIndex:3];
+                [inv setArgument:&rot    atIndex:4];
+                [inv invoke];
+                NSLog(@"[ModMenu] Spawned %@ at 0,0,0 via PhotonNetwork", prefab);
+                continue;
             }
         }
+        // Fallback notification
         [[NSNotificationCenter defaultCenter]
             postNotificationName:@"ACModSpawn"
             object:nil
-            userInfo:@{@"prefab": prefabName}];
+            userInfo:@{@"prefab": prefab, @"x": @0, @"y": @0, @"z": @0}];
+        NSLog(@"[ModMenu] Spawn fallback notification sent");
     }
-    NSLog(@"[ModMenu] Spawned %dx %@", amount, prefabName);
-}
-
-static void setControllerColor(UIColor *color) {
-    CGFloat r, g, b, a;
-    [color getRed:&r green:&g blue:&b alpha:&a];
-    NSString *colorJson = [NSString stringWithFormat:
-        @"{\"r\":%.4f,\"g\":%.4f,\"b\":%.4f,\"a\":%.4f}", r, g, b, a];
-    Class mgrCls = NSClassFromString(@"PhotonVRManager");
-    if (mgrCls) {
-        id mgr = [mgrCls performSelector:@selector(Manager)];
-        if (mgr) {
-            id localPlayer = [mgr performSelector:@selector(LocalPlayer)];
-            if (localPlayer) {
-                SEL s = NSSelectorFromString(@"SetCustomProperty:value:");
-                if ([localPlayer respondsToSelector:s])
-                    [localPlayer performSelector:s withObject:@"Colour" withObject:colorJson];
-                SEL r2 = NSSelectorFromString(@"RefreshPlayerValues");
-                if ([localPlayer respondsToSelector:r2])
-                    [localPlayer performSelector:r2];
-            }
-        }
-    }
-    NSLog(@"[ModMenu] Controller color: %@", colorJson);
 }
 
 static void toggleMenu() {
@@ -123,17 +99,9 @@ static void toggleMenu() {
 @interface ACModHandler : NSObject
 + (instancetype)shared;
 - (void)floatTapped;
-- (void)spawnLandmine;
+- (void)spawnTapped;
 - (void)minusTapped;
 - (void)plusTapped;
-- (void)colorRed;
-- (void)colorGreen;
-- (void)colorBlue;
-- (void)colorYellow;
-- (void)colorPurple;
-- (void)redController;
-- (void)greenController;
-- (void)resetController;
 @end
 
 @implementation ACModHandler
@@ -143,18 +111,16 @@ static void toggleMenu() {
     dispatch_once(&t, ^{ s = [ACModHandler new]; });
     return s;
 }
-- (void)floatTapped     { toggleMenu(); }
-- (void)spawnLandmine   { photonSpawnItem(@"item_landmine", gSpawnAmount); }
-- (void)minusTapped     { if (gSpawnAmount > 1) gSpawnAmount--; gAmountLabel.text = [NSString stringWithFormat:@"%d", gSpawnAmount]; }
-- (void)plusTapped      { if (gSpawnAmount < 50) gSpawnAmount++; gAmountLabel.text = [NSString stringWithFormat:@"%d", gSpawnAmount]; }
-- (void)colorRed        { gPickedColor = [UIColor redColor];    gColorPreview.backgroundColor = gPickedColor; }
-- (void)colorGreen      { gPickedColor = [UIColor greenColor];  gColorPreview.backgroundColor = gPickedColor; }
-- (void)colorBlue       { gPickedColor = [UIColor blueColor];   gColorPreview.backgroundColor = gPickedColor; }
-- (void)colorYellow     { gPickedColor = [UIColor yellowColor]; gColorPreview.backgroundColor = gPickedColor; }
-- (void)colorPurple     { gPickedColor = [UIColor purpleColor]; gColorPreview.backgroundColor = gPickedColor; }
-- (void)redController   { setControllerColor([UIColor redColor]); }
-- (void)greenController { setControllerColor([UIColor greenColor]); }
-- (void)resetController { setControllerColor([UIColor whiteColor]); }
+- (void)floatTapped { toggleMenu(); }
+- (void)spawnTapped { spawnLandmine(gSpawnAmount); }
+- (void)minusTapped {
+    if (gSpawnAmount > 1) gSpawnAmount--;
+    gAmountLabel.text = [NSString stringWithFormat:@"%d", gSpawnAmount];
+}
+- (void)plusTapped {
+    if (gSpawnAmount < 50) gSpawnAmount++;
+    gAmountLabel.text = [NSString stringWithFormat:@"%d", gSpawnAmount];
+}
 @end
 
 static void buildModMenu() {
@@ -171,33 +137,32 @@ static void buildModMenu() {
             }
         }
 
-        // Use passthrough window so app underneath stays interactive
-        if (scene) {
-            gModWindow = [[ACPassthroughWindow alloc] initWithWindowScene:scene];
-        } else {
-            gModWindow = [[ACPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        }
+        gModWindow = scene
+            ? [[ACPassthroughWindow alloc] initWithWindowScene:scene]
+            : [[ACPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
 
         gModWindow.windowLevel = UIWindowLevelAlert + 999;
         gModWindow.backgroundColor = [UIColor clearColor];
         gModWindow.userInteractionEnabled = YES;
+
         UIViewController *vc = [UIViewController new];
         vc.view.backgroundColor = [UIColor clearColor];
-        vc.view.userInteractionEnabled = YES;
         gModWindow.rootViewController = vc;
         gModWindow.hidden = NO;
         [gModWindow makeKeyAndVisible];
 
         UIView *root = vc.view;
-        CGFloat mw = 255, pad = 14, bw = mw - pad * 2;
+        CGFloat pad = 14;
+        CGFloat mw  = 220;
+        CGFloat bw  = mw - pad * 2;
 
-        // ── Draggable floating button ──
+        // ── Floating circle button ──
         gFloatBtn = [[ACDragButton alloc] initWithFrame:CGRectMake(16, 160, 50, 50)];
-        gFloatBtn.layer.cornerRadius = 25;
+        gFloatBtn.layer.cornerRadius  = 25;
         gFloatBtn.layer.masksToBounds = YES;
-        gFloatBtn.backgroundColor = [UIColor colorWithRed:0.05 green:0.6 blue:0.05 alpha:0.95];
-        gFloatBtn.layer.borderColor = [UIColor colorWithRed:0.1 green:1 blue:0.1 alpha:0.8].CGColor;
-        gFloatBtn.layer.borderWidth = 2;
+        gFloatBtn.backgroundColor     = [UIColor colorWithRed:0.05 green:0.55 blue:0.05 alpha:0.95];
+        gFloatBtn.layer.borderColor   = [UIColor colorWithRed:0.1 green:1 blue:0.1 alpha:0.7].CGColor;
+        gFloatBtn.layer.borderWidth   = 2;
         [gFloatBtn setTitle:@"☰" forState:UIControlStateNormal];
         [gFloatBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         gFloatBtn.titleLabel.font = [UIFont systemFontOfSize:20];
@@ -205,168 +170,87 @@ static void buildModMenu() {
         [root addSubview:gFloatBtn];
 
         // ── Menu panel ──
-        gMenuView = [[UIView alloc] initWithFrame:CGRectMake(74, 100, mw, 430)];
-        gMenuView.backgroundColor = [UIColor colorWithRed:0.04 green:0.1 blue:0.04 alpha:0.97];
-        gMenuView.layer.cornerRadius = 14;
-        gMenuView.layer.borderColor = [UIColor colorWithRed:0.1 green:0.8 blue:0.1 alpha:0.4].CGColor;
-        gMenuView.layer.borderWidth = 1.5;
-        gMenuView.hidden = YES;
+        CGFloat mh = 200;
+        gMenuView = [[UIView alloc] initWithFrame:CGRectMake(74, 140, mw, mh)];
+        gMenuView.backgroundColor     = [UIColor colorWithRed:0.04 green:0.09 blue:0.04 alpha:0.97];
+        gMenuView.layer.cornerRadius  = 14;
+        gMenuView.layer.borderColor   = [UIColor colorWithRed:0.1 green:0.75 blue:0.1 alpha:0.45].CGColor;
+        gMenuView.layer.borderWidth   = 1.5;
+        gMenuView.hidden              = YES;
         [root addSubview:gMenuView];
 
         CGFloat y = 12;
 
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, y, mw, 26)];
-        title.text = @"🐾 AC Mod Menu";
-        title.textColor = [UIColor colorWithRed:0.2 green:1 blue:0.2 alpha:1];
-        title.font = [UIFont boldSystemFontOfSize:15];
+        // Title
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, y, mw, 24)];
+        title.text          = @"🐾 AC Mod Menu";
+        title.textColor     = [UIColor colorWithRed:0.2 green:1 blue:0.2 alpha:1];
+        title.font          = [UIFont boldSystemFontOfSize:14];
         title.textAlignment = NSTextAlignmentCenter;
         [gMenuView addSubview:title];
         y += 28;
 
-        UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(0, y, mw, 14)];
-        sub.text = @"Photon PUN2";
-        sub.textColor = [UIColor colorWithWhite:0.4 alpha:1];
-        sub.font = [UIFont systemFontOfSize:10];
-        sub.textAlignment = NSTextAlignmentCenter;
-        [gMenuView addSubview:sub];
-        y += 22;
-
-        UIView *d1 = [[UIView alloc] initWithFrame:CGRectMake(pad, y, bw, 1)];
-        d1.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.1 alpha:0.5];
-        [gMenuView addSubview:d1];
+        // Divider
+        UIView *div = [[UIView alloc] initWithFrame:CGRectMake(pad, y, bw, 1)];
+        div.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+        [gMenuView addSubview:div];
         y += 10;
 
-        UILabel *spawnHdr = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, bw, 16)];
-        spawnHdr.text = @"SPAWN";
+        // SPAWN label
+        UILabel *spawnHdr = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, bw, 14)];
+        spawnHdr.text      = @"SPAWN  (pos: 0, 0, 0)";
         spawnHdr.textColor = [UIColor colorWithRed:0.3 green:0.9 blue:1 alpha:1];
-        spawnHdr.font = [UIFont boldSystemFontOfSize:10];
+        spawnHdr.font      = [UIFont boldSystemFontOfSize:9];
         [gMenuView addSubview:spawnHdr];
-        y += 20;
+        y += 18;
 
-        UIButton *lmBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        lmBtn.frame = CGRectMake(pad, y, bw, 40);
-        lmBtn.backgroundColor = [UIColor colorWithRed:0.7 green:0.15 blue:0.15 alpha:1];
-        lmBtn.layer.cornerRadius = 8;
-        [lmBtn setTitle:@"💣  item_landmine" forState:UIControlStateNormal];
-        [lmBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        lmBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
-        [lmBtn addTarget:[ACModHandler shared] action:@selector(spawnLandmine) forControlEvents:UIControlEventTouchUpInside];
-        [gMenuView addSubview:lmBtn];
+        // Spawn button
+        UIButton *spawnBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        spawnBtn.frame           = CGRectMake(pad, y, bw, 40);
+        spawnBtn.backgroundColor = [UIColor colorWithRed:0.65 green:0.12 blue:0.12 alpha:1];
+        spawnBtn.layer.cornerRadius = 8;
+        [spawnBtn setTitle:@"💣  item_landmine" forState:UIControlStateNormal];
+        [spawnBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        spawnBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+        [spawnBtn addTarget:[ACModHandler shared] action:@selector(spawnTapped) forControlEvents:UIControlEventTouchUpInside];
+        [gMenuView addSubview:spawnBtn];
         y += 50;
 
-        UILabel *amtLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y+2, 68, 22)];
-        amtLbl.text = @"Amount:";
+        // Amount stepper
+        UILabel *amtLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y+2, 60, 22)];
+        amtLbl.text      = @"Amount:";
         amtLbl.textColor = [UIColor lightGrayColor];
-        amtLbl.font = [UIFont systemFontOfSize:12];
+        amtLbl.font      = [UIFont systemFontOfSize:12];
         [gMenuView addSubview:amtLbl];
 
         UIButton *minus = [UIButton buttonWithType:UIButtonTypeSystem];
-        minus.frame = CGRectMake(88, y, 32, 26);
-        minus.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1];
+        minus.frame           = CGRectMake(80, y, 30, 26);
+        minus.backgroundColor = [UIColor colorWithWhite:0.22 alpha:1];
         minus.layer.cornerRadius = 6;
         [minus setTitle:@"−" forState:UIControlStateNormal];
         [minus setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        minus.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+        minus.titleLabel.font = [UIFont boldSystemFontOfSize:17];
         [minus addTarget:[ACModHandler shared] action:@selector(minusTapped) forControlEvents:UIControlEventTouchUpInside];
         [gMenuView addSubview:minus];
 
-        gAmountLabel = [[UILabel alloc] initWithFrame:CGRectMake(126, y, 28, 26)];
-        gAmountLabel.text = @"1";
-        gAmountLabel.textColor = [UIColor whiteColor];
-        gAmountLabel.font = [UIFont boldSystemFontOfSize:15];
+        gAmountLabel = [[UILabel alloc] initWithFrame:CGRectMake(116, y, 26, 26)];
+        gAmountLabel.text          = @"1";
+        gAmountLabel.textColor     = [UIColor whiteColor];
+        gAmountLabel.font          = [UIFont boldSystemFontOfSize:15];
         gAmountLabel.textAlignment = NSTextAlignmentCenter;
         [gMenuView addSubview:gAmountLabel];
 
         UIButton *plusBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        plusBtn.frame = CGRectMake(160, y, 32, 26);
-        plusBtn.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1];
+        plusBtn.frame           = CGRectMake(148, y, 30, 26);
+        plusBtn.backgroundColor = [UIColor colorWithWhite:0.22 alpha:1];
         plusBtn.layer.cornerRadius = 6;
         [plusBtn setTitle:@"+" forState:UIControlStateNormal];
         [plusBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        plusBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+        plusBtn.titleLabel.font = [UIFont boldSystemFontOfSize:17];
         [plusBtn addTarget:[ACModHandler shared] action:@selector(plusTapped) forControlEvents:UIControlEventTouchUpInside];
         [gMenuView addSubview:plusBtn];
-        y += 38;
 
-        UILabel *colLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y+2, 50, 22)];
-        colLbl.text = @"Color:";
-        colLbl.textColor = [UIColor lightGrayColor];
-        colLbl.font = [UIFont systemFontOfSize:12];
-        [gMenuView addSubview:colLbl];
-
-        NSArray *colorDefs = @[
-            @[[UIColor redColor],    NSStringFromSelector(@selector(colorRed))],
-            @[[UIColor greenColor],  NSStringFromSelector(@selector(colorGreen))],
-            @[[UIColor blueColor],   NSStringFromSelector(@selector(colorBlue))],
-            @[[UIColor yellowColor], NSStringFromSelector(@selector(colorYellow))],
-            @[[UIColor purpleColor], NSStringFromSelector(@selector(colorPurple))],
-        ];
-        CGFloat cx = 70;
-        for (NSArray *def in colorDefs) {
-            UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
-            cb.frame = CGRectMake(cx, y+1, 24, 24);
-            cb.backgroundColor = def[0];
-            cb.layer.cornerRadius = 12;
-            cb.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.4].CGColor;
-            cb.layer.borderWidth = 1.2;
-            [cb addTarget:[ACModHandler shared] action:NSSelectorFromString(def[1]) forControlEvents:UIControlEventTouchUpInside];
-            [gMenuView addSubview:cb];
-            cx += 30;
-        }
-        gColorPreview = [[UIView alloc] initWithFrame:CGRectMake(cx+4, y+1, 24, 24)];
-        gColorPreview.backgroundColor = [UIColor redColor];
-        gColorPreview.layer.cornerRadius = 12;
-        gColorPreview.layer.borderColor = [UIColor whiteColor].CGColor;
-        gColorPreview.layer.borderWidth = 1.5;
-        [gMenuView addSubview:gColorPreview];
-        y += 40;
-
-        UIView *d2 = [[UIView alloc] initWithFrame:CGRectMake(pad, y, bw, 1)];
-        d2.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.1 alpha:0.5];
-        [gMenuView addSubview:d2];
-        y += 10;
-
-        UILabel *ctrlHdr = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, bw, 16)];
-        ctrlHdr.text = @"CONTROLLER COLOR";
-        ctrlHdr.textColor = [UIColor colorWithRed:0.3 green:0.9 blue:1 alpha:1];
-        ctrlHdr.font = [UIFont boldSystemFontOfSize:10];
-        [gMenuView addSubview:ctrlHdr];
-        y += 20;
-
-        CGFloat halfW = (bw - 8) / 2.0;
-
-        UIButton *redBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        redBtn.frame = CGRectMake(pad, y, halfW, 36);
-        redBtn.backgroundColor = [UIColor colorWithRed:0.65 green:0.1 blue:0.1 alpha:1];
-        redBtn.layer.cornerRadius = 8;
-        [redBtn setTitle:@"🔴 Red" forState:UIControlStateNormal];
-        [redBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        redBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
-        [redBtn addTarget:[ACModHandler shared] action:@selector(redController) forControlEvents:UIControlEventTouchUpInside];
-        [gMenuView addSubview:redBtn];
-
-        UIButton *greenBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        greenBtn.frame = CGRectMake(pad + halfW + 8, y, halfW, 36);
-        greenBtn.backgroundColor = [UIColor colorWithRed:0.1 green:0.5 blue:0.1 alpha:1];
-        greenBtn.layer.cornerRadius = 8;
-        [greenBtn setTitle:@"🟢 Green" forState:UIControlStateNormal];
-        [greenBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        greenBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
-        [greenBtn addTarget:[ACModHandler shared] action:@selector(greenController) forControlEvents:UIControlEventTouchUpInside];
-        [gMenuView addSubview:greenBtn];
-        y += 46;
-
-        UIButton *resetBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        resetBtn.frame = CGRectMake(pad, y, bw, 30);
-        resetBtn.backgroundColor = [UIColor colorWithWhite:0.18 alpha:1];
-        resetBtn.layer.cornerRadius = 8;
-        [resetBtn setTitle:@"⬜ Reset Controller" forState:UIControlStateNormal];
-        [resetBtn setTitleColor:[UIColor lightGrayColor] forState:UIControlStateNormal];
-        resetBtn.titleLabel.font = [UIFont systemFontOfSize:12];
-        [resetBtn addTarget:[ACModHandler shared] action:@selector(resetController) forControlEvents:UIControlEventTouchUpInside];
-        [gMenuView addSubview:resetBtn];
-
-        NSLog(@"[ModMenu] Passthrough overlay built");
+        NSLog(@"[ModMenu] Built");
     });
 }
 
@@ -380,5 +264,4 @@ static void buildModMenu() {
 %ctor {
     NSLog(@"[ModMenu] Loaded");
     gSpawnAmount = 1;
-    gPickedColor = [UIColor redColor];
 }
