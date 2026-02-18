@@ -14,29 +14,31 @@ workflows:
           set -e
           export THEOS=$HOME/theos
 
-          # Clone Theos if not present
+          # Clone Theos
           if [ ! -d "$THEOS" ]; then
             git clone --recursive https://github.com/theos/theos.git $THEOS
           fi
 
-          # Manually download iOS SDK from correct URL
+          # Use Xcode's built-in SDK (already on Codemagic Mac machines - no download needed)
+          XCODE_SDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)
           SDK_DIR=$THEOS/sdks
           mkdir -p $SDK_DIR
 
-          if [ ! -d "$SDK_DIR/iPhoneOS16.5.sdk" ]; then
-            echo "[*] Downloading iOS 16.5 SDK..."
-            curl -L "https://github.com/theos/sdks/releases/download/100/iPhoneOS16.5.sdk.tar.xz" \
-              -o /tmp/sdk.tar.xz \
-              --retry 3 \
-              --max-time 300
-
-            echo "[*] Downloaded $(du -sh /tmp/sdk.tar.xz | cut -f1)"
-            tar -xJf /tmp/sdk.tar.xz -C $SDK_DIR
-            rm /tmp/sdk.tar.xz
+          if [ -n "$XCODE_SDK" ]; then
+            SDK_NAME=$(basename $XCODE_SDK)
+            if [ ! -e "$SDK_DIR/$SDK_NAME" ]; then
+              echo "[*] Linking Xcode SDK: $SDK_NAME"
+              ln -sf "$XCODE_SDK" "$SDK_DIR/$SDK_NAME"
+            fi
+            echo "[✓] Using SDK: $SDK_NAME"
+          else
+            echo "[!] Could not find Xcode SDK"
+            exit 1
           fi
 
+          # Write THEOS to env for subsequent steps
           echo "THEOS=$HOME/theos" >> $CM_ENV
-          echo "[✓] Theos ready. SDKs:"
+          echo "[✓] Theos installed. SDKs:"
           ls $SDK_DIR
 
       - name: Install inject_dylib
@@ -51,6 +53,7 @@ workflows:
             BUILT=$(find /tmp/insert_dylib/build -name "insert_dylib" -type f | head -1)
             cp "$BUILT" /usr/local/bin/insert_dylib
             chmod +x /usr/local/bin/insert_dylib
+            echo "[✓] insert_dylib installed"
           fi
 
       - name: Build Dylib
@@ -58,7 +61,6 @@ workflows:
           set -e
           export THEOS=$HOME/theos
           export THEOS_MAKE_PATH=$THEOS/makefiles
-          export SDKVERSION=16.5
           cd $CM_BUILD_DIR
           make -j$(sysctl -n hw.ncpu) 2>&1
           echo "[*] Built artifacts:"
