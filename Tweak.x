@@ -15,6 +15,53 @@ static UIView    *gColorPreview = nil;
 static UIColor   *gPickedColor  = nil;
 static BOOL       gMenuBuilt    = NO;
 
+// ── Passthrough window — lets touches reach the app below ──
+@interface ACPassthroughWindow : UIWindow
+@end
+@implementation ACPassthroughWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    // If hit is our own root vc view or window itself, pass through to app
+    if (hit == self.rootViewController.view || hit == nil) return nil;
+    return hit;
+}
+@end
+
+// ── Draggable float button ──
+@interface ACDragButton : UIButton
+@property (nonatomic, assign) CGPoint dragStart;
+@property (nonatomic, assign) CGPoint centerStart;
+@property (nonatomic, assign) BOOL didDrag;
+@end
+@implementation ACDragButton
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        [self addGestureRecognizer:pan];
+    }
+    return self;
+}
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
+    if (pan.state == UIGestureRecognizerStateBegan) {
+        _dragStart = [pan locationInView:self.superview];
+        _centerStart = self.center;
+        _didDrag = NO;
+    } else if (pan.state == UIGestureRecognizerStateChanged) {
+        CGPoint cur = [pan locationInView:self.superview];
+        CGFloat dx = cur.x - _dragStart.x;
+        CGFloat dy = cur.y - _dragStart.y;
+        if (fabs(dx) > 4 || fabs(dy) > 4) _didDrag = YES;
+        self.center = CGPointMake(_centerStart.x + dx, _centerStart.y + dy);
+    }
+}
+// Only fire tap if we didn't drag
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (!_didDrag) [super touchesEnded:touches withEvent:event];
+    _didDrag = NO;
+}
+@end
+
 static void photonSpawnItem(NSString *prefabName, int amount) {
     for (int i = 0; i < amount; i++) {
         Class photonNet = NSClassFromString(@"PhotonNetwork");
@@ -124,10 +171,11 @@ static void buildModMenu() {
             }
         }
 
+        // Use passthrough window so app underneath stays interactive
         if (scene) {
-            gModWindow = [[UIWindow alloc] initWithWindowScene:scene];
+            gModWindow = [[ACPassthroughWindow alloc] initWithWindowScene:scene];
         } else {
-            gModWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+            gModWindow = [[ACPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
         }
 
         gModWindow.windowLevel = UIWindowLevelAlert + 999;
@@ -135,6 +183,7 @@ static void buildModMenu() {
         gModWindow.userInteractionEnabled = YES;
         UIViewController *vc = [UIViewController new];
         vc.view.backgroundColor = [UIColor clearColor];
+        vc.view.userInteractionEnabled = YES;
         gModWindow.rootViewController = vc;
         gModWindow.hidden = NO;
         [gModWindow makeKeyAndVisible];
@@ -142,9 +191,8 @@ static void buildModMenu() {
         UIView *root = vc.view;
         CGFloat mw = 255, pad = 14, bw = mw - pad * 2;
 
-        // Floating button
-        gFloatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        gFloatBtn.frame = CGRectMake(16, 160, 50, 50);
+        // ── Draggable floating button ──
+        gFloatBtn = [[ACDragButton alloc] initWithFrame:CGRectMake(16, 160, 50, 50)];
         gFloatBtn.layer.cornerRadius = 25;
         gFloatBtn.layer.masksToBounds = YES;
         gFloatBtn.backgroundColor = [UIColor colorWithRed:0.05 green:0.6 blue:0.05 alpha:0.95];
@@ -156,7 +204,7 @@ static void buildModMenu() {
         [gFloatBtn addTarget:[ACModHandler shared] action:@selector(floatTapped) forControlEvents:UIControlEventTouchUpInside];
         [root addSubview:gFloatBtn];
 
-        // Menu panel
+        // ── Menu panel ──
         gMenuView = [[UIView alloc] initWithFrame:CGRectMake(74, 100, mw, 430)];
         gMenuView.backgroundColor = [UIColor colorWithRed:0.04 green:0.1 blue:0.04 alpha:0.97];
         gMenuView.layer.cornerRadius = 14;
@@ -318,22 +366,19 @@ static void buildModMenu() {
         [resetBtn addTarget:[ACModHandler shared] action:@selector(resetController) forControlEvents:UIControlEventTouchUpInside];
         [gMenuView addSubview:resetBtn];
 
-        NSLog(@"[ModMenu] Overlay built successfully");
+        NSLog(@"[ModMenu] Passthrough overlay built");
     });
 }
 
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (!gMenuBuilt) {
-        NSLog(@"[ModMenu] viewDidAppear - building menu");
-        buildModMenu();
-    }
+    if (!gMenuBuilt) buildModMenu();
 }
 %end
 
 %ctor {
-    NSLog(@"[ModMenu] Animal Company Mod Menu loaded");
+    NSLog(@"[ModMenu] Loaded");
     gSpawnAmount = 1;
     gPickedColor = [UIColor redColor];
 }
