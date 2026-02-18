@@ -1,9 +1,0 @@
-Package: com.yourname.mytweak
-Name: MyTweak
-Version: 1.0.0
-Architecture: iphoneos-arm64
-Description: A custom dylib tweak
-Maintainer: Your Name <you@example.com>
-Author: Your Name <you@example.com>
-Section: Tweaks
-Depends: mobilesubstrate | substituted | libhooker

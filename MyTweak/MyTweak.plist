@@ -1,6 +1,0 @@
-Filter = {
-    // Inject into a specific app by bundle ID - change this!
-    Bundles = (
-        "com.example.targetapp"
-    );
-};
