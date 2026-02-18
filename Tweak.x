@@ -17,8 +17,6 @@ static BOOL       gMenuBuilt    = NO;
 
 static void photonSpawnItem(NSString *prefabName, int amount) {
     for (int i = 0; i < amount; i++) {
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
         Class photonNet = NSClassFromString(@"PhotonNetwork");
         if (photonNet) {
             SEL s = NSSelectorFromString(@"Instantiate:position:rotation:");
@@ -34,12 +32,10 @@ static void photonSpawnItem(NSString *prefabName, int amount) {
                     [inv setArgument:&pos atIndex:3];
                     [inv setArgument:&rot atIndex:4];
                     [inv invoke];
-                    #pragma clang diagnostic pop
                     continue;
                 }
             }
         }
-        #pragma clang diagnostic pop
         [[NSNotificationCenter defaultCenter]
             postNotificationName:@"ACModSpawn"
             object:nil
@@ -53,8 +49,6 @@ static void setControllerColor(UIColor *color) {
     [color getRed:&r green:&g blue:&b alpha:&a];
     NSString *colorJson = [NSString stringWithFormat:
         @"{\"r\":%.4f,\"g\":%.4f,\"b\":%.4f,\"a\":%.4f}", r, g, b, a];
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
     Class mgrCls = NSClassFromString(@"PhotonVRManager");
     if (mgrCls) {
         id mgr = [mgrCls performSelector:@selector(Manager)];
@@ -70,7 +64,6 @@ static void setControllerColor(UIColor *color) {
             }
         }
     }
-    #pragma clang diagnostic pop
     NSLog(@"[ModMenu] Controller color: %@", colorJson);
 }
 
@@ -164,8 +157,7 @@ static void buildModMenu() {
         [root addSubview:gFloatBtn];
 
         // Menu panel
-        CGFloat mh = 430;
-        gMenuView = [[UIView alloc] initWithFrame:CGRectMake(74, 100, mw, mh)];
+        gMenuView = [[UIView alloc] initWithFrame:CGRectMake(74, 100, mw, 430)];
         gMenuView.backgroundColor = [UIColor colorWithRed:0.04 green:0.1 blue:0.04 alpha:0.97];
         gMenuView.layer.cornerRadius = 14;
         gMenuView.layer.borderColor = [UIColor colorWithRed:0.1 green:0.8 blue:0.1 alpha:0.4].CGColor;
@@ -175,7 +167,6 @@ static void buildModMenu() {
 
         CGFloat y = 12;
 
-        // Title
         UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, y, mw, 26)];
         title.text = @"🐾 AC Mod Menu";
         title.textColor = [UIColor colorWithRed:0.2 green:1 blue:0.2 alpha:1];
@@ -197,7 +188,6 @@ static void buildModMenu() {
         [gMenuView addSubview:d1];
         y += 10;
 
-        // SPAWN header
         UILabel *spawnHdr = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, bw, 16)];
         spawnHdr.text = @"SPAWN";
         spawnHdr.textColor = [UIColor colorWithRed:0.3 green:0.9 blue:1 alpha:1];
@@ -205,7 +195,6 @@ static void buildModMenu() {
         [gMenuView addSubview:spawnHdr];
         y += 20;
 
-        // Landmine button
         UIButton *lmBtn = [UIButton buttonWithType:UIButtonTypeSystem];
         lmBtn.frame = CGRectMake(pad, y, bw, 40);
         lmBtn.backgroundColor = [UIColor colorWithRed:0.7 green:0.15 blue:0.15 alpha:1];
@@ -217,7 +206,6 @@ static void buildModMenu() {
         [gMenuView addSubview:lmBtn];
         y += 50;
 
-        // Amount stepper
         UILabel *amtLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y+2, 68, 22)];
         amtLbl.text = @"Amount:";
         amtLbl.textColor = [UIColor lightGrayColor];
@@ -252,7 +240,6 @@ static void buildModMenu() {
         [gMenuView addSubview:plusBtn];
         y += 38;
 
-        // Color row
         UILabel *colLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y+2, 50, 22)];
         colLbl.text = @"Color:";
         colLbl.textColor = [UIColor lightGrayColor];
@@ -291,7 +278,6 @@ static void buildModMenu() {
         [gMenuView addSubview:d2];
         y += 10;
 
-        // Controller header
         UILabel *ctrlHdr = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, bw, 16)];
         ctrlHdr.text = @"CONTROLLER COLOR";
         ctrlHdr.textColor = [UIColor colorWithRed:0.3 green:0.9 blue:1 alpha:1];
