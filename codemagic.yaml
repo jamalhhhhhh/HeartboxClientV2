@@ -19,19 +19,25 @@ workflows:
             git clone --recursive https://github.com/theos/theos.git $THEOS
           fi
 
-          # Manually download iOS SDK (bypasses GitHub API)
+          # Manually download iOS SDK from correct URL
           SDK_DIR=$THEOS/sdks
           mkdir -p $SDK_DIR
 
           if [ ! -d "$SDK_DIR/iPhoneOS16.5.sdk" ]; then
             echo "[*] Downloading iOS 16.5 SDK..."
-            curl -L https://github.com/theos/sdks/releases/download/v1/iPhoneOS16.5.sdk.tar.xz -o /tmp/sdk.tar.xz
-            tar -xf /tmp/sdk.tar.xz -C $SDK_DIR
+            curl -L "https://github.com/theos/sdks/releases/download/100/iPhoneOS16.5.sdk.tar.xz" \
+              -o /tmp/sdk.tar.xz \
+              --retry 3 \
+              --max-time 300
+
+            echo "[*] Downloaded $(du -sh /tmp/sdk.tar.xz | cut -f1)"
+            tar -xJf /tmp/sdk.tar.xz -C $SDK_DIR
             rm /tmp/sdk.tar.xz
           fi
 
           echo "THEOS=$HOME/theos" >> $CM_ENV
-          echo "[✓] Theos ready at $THEOS"
+          echo "[✓] Theos ready. SDKs:"
+          ls $SDK_DIR
 
       - name: Install inject_dylib
         script: |
@@ -42,8 +48,9 @@ workflows:
             git clone https://github.com/tyilo/insert_dylib.git /tmp/insert_dylib
             cd /tmp/insert_dylib
             xcodebuild -configuration Release SYMROOT=/tmp/insert_dylib/build 2>/dev/null
-            cp /tmp/insert_dylib/build/Release/insert_dylib /usr/local/bin/ 2>/dev/null || \
-            cp $(find /tmp/insert_dylib/build -name "insert_dylib" -type f | head -1) /usr/local/bin/
+            BUILT=$(find /tmp/insert_dylib/build -name "insert_dylib" -type f | head -1)
+            cp "$BUILT" /usr/local/bin/insert_dylib
+            chmod +x /usr/local/bin/insert_dylib
           fi
 
       - name: Build Dylib
