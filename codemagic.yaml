@@ -21,21 +21,21 @@ workflows:
           SDK_DIR=$THEOS/sdks
           mkdir -p $SDK_DIR
 
-          XCODE_SDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)
-          if [ -n "$XCODE_SDK" ]; then
-            SDK_NAME=$(basename $XCODE_SDK)
-            if [ ! -e "$SDK_DIR/$SDK_NAME" ]; then
-              echo "[*] Linking Xcode SDK: $SDK_NAME"
-              ln -sf "$XCODE_SDK" "$SDK_DIR/$SDK_NAME"
-            fi
-            echo "[✓] Using SDK: $SDK_NAME"
-          else
-            echo "[!] Could not find Xcode SDK"
-            exit 1
+          # Auto-detect whatever iOS SDK Xcode has
+          XCODE_SDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
+          SDK_NAME=$(basename "$XCODE_SDK")
+          echo "[*] Found Xcode SDK: $SDK_NAME at $XCODE_SDK"
+
+          if [ ! -e "$SDK_DIR/$SDK_NAME" ]; then
+            ln -sf "$XCODE_SDK" "$SDK_DIR/$SDK_NAME"
           fi
 
+          # Extract version number e.g. iPhoneOS17.2.sdk -> 17.2
+          SDK_VERSION=$(echo "$SDK_NAME" | sed 's/iPhoneOS//;s/\.sdk//')
+          echo "[✓] SDK version: $SDK_VERSION"
+
           echo "THEOS=$HOME/theos" >> $CM_ENV
-          echo "[✓] Theos ready. SDKs:"
+          echo "SDKVERSION=$SDK_VERSION" >> $CM_ENV
           ls $SDK_DIR
 
       - name: Install inject_dylib
@@ -59,7 +59,7 @@ workflows:
           export THEOS=$HOME/theos
           export THEOS_MAKE_PATH=$THEOS/makefiles
           cd $CM_BUILD_DIR
-          make -j$(sysctl -n hw.ncpu) 2>&1
+          make -j$(sysctl -n hw.ncpu) SDKVERSION=$SDKVERSION 2>&1
           echo "[*] Built artifacts:"
           find . -name "*.dylib" | head -10
 
@@ -69,11 +69,8 @@ workflows:
           FILE_ID="10zfkTLaXudtJZJi-wdGO4Y5Si1Aw6lI4"
           OUTPUT="target.ipa"
           echo "[*] Downloading IPA from Google Drive..."
-
-          # Use gdown for reliable large file Google Drive downloads
           pip3 install gdown --quiet
           gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT"
-
           echo "[✓] Downloaded: $(du -sh $OUTPUT | cut -f1)"
 
       - name: Inject Dylib into IPA
