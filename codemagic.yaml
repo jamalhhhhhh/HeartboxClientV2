@@ -4,78 +4,95 @@ workflows:
     max_build_duration: 60
     environment:
       vars:
-        # ── Set these in Codemagic Environment Variables (mark secrets as secure) ──
-        TARGET_BUNDLE_ID: "com.example.targetapp"   # <-- change to your target app
-        # IPA_URL: https://your-server.com/app.ipa  # optional: download IPA from URL
+        TARGET_BUNDLE_ID: "com.woostergames.animalcompany"
       xcode: latest
       cocoapods: default
 
     scripts:
-      # ── 1. Install Theos ──
       - name: Install Theos
         script: |
           set -e
-          if [ ! -d "$THEOS" ]; then
-            export THEOS=~/theos
-            bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-          fi
-          echo "THEOS=$HOME/theos" >> $CM_ENV
+          export THEOS=$HOME/theos
 
-      # ── 2. Install build tools ──
-      - name: Install inject_dylib & optool
+          if [ ! -d "$THEOS" ]; then
+            git clone --recursive https://github.com/theos/theos.git $THEOS
+          fi
+
+          SDK_DIR=$THEOS/sdks
+          mkdir -p $SDK_DIR
+
+          XCODE_SDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)
+          if [ -n "$XCODE_SDK" ]; then
+            SDK_NAME=$(basename $XCODE_SDK)
+            if [ ! -e "$SDK_DIR/$SDK_NAME" ]; then
+              echo "[*] Linking Xcode SDK: $SDK_NAME"
+              ln -sf "$XCODE_SDK" "$SDK_DIR/$SDK_NAME"
+            fi
+            echo "[✓] Using SDK: $SDK_NAME"
+          else
+            echo "[!] Could not find Xcode SDK"
+            exit 1
+          fi
+
+          echo "THEOS=$HOME/theos" >> $CM_ENV
+          echo "[✓] Theos ready. SDKs:"
+          ls $SDK_DIR
+
+      - name: Install inject_dylib
         script: |
           set -e
           brew install ldid 2>/dev/null || true
 
-          # Build insert_dylib from source
           if ! command -v insert_dylib &>/dev/null; then
             git clone https://github.com/tyilo/insert_dylib.git /tmp/insert_dylib
             cd /tmp/insert_dylib
-            xcodebuild -configuration Release -arch x86_64 -arch arm64 SYMROOT=/tmp/insert_dylib/build
-            cp /tmp/insert_dylib/build/Release/insert_dylib /usr/local/bin/
+            xcodebuild -configuration Release SYMROOT=/tmp/insert_dylib/build 2>/dev/null
+            BUILT=$(find /tmp/insert_dylib/build -name "insert_dylib" -type f | head -1)
+            cp "$BUILT" /usr/local/bin/insert_dylib
+            chmod +x /usr/local/bin/insert_dylib
+            echo "[✓] insert_dylib installed"
           fi
 
-      # ── 3. Build the Dylib with Theos ──
       - name: Build Dylib
         script: |
           set -e
           export THEOS=$HOME/theos
+          export THEOS_MAKE_PATH=$THEOS/makefiles
           cd $CM_BUILD_DIR
-          make clean
           make -j$(sysctl -n hw.ncpu) 2>&1
           echo "[*] Built artifacts:"
           find . -name "*.dylib" | head -10
 
-      # ── 4. (Optional) Download target IPA ──
-      # Uncomment this block if you want to download the IPA automatically.
-      # Otherwise, upload the IPA as a Codemagic build artifact input.
-      #
-      # - name: Download IPA
-      #   script: |
-      #     curl -L "$IPA_URL" -o target.ipa
+      - name: Download IPA
+        script: |
+          set -e
+          FILE_ID="10zfkTLaXudtJZJi-wdGO4Y5Si1Aw6lI4"
+          OUTPUT="target.ipa"
+          echo "[*] Downloading IPA from Google Drive..."
 
-      # ── 5. Inject dylib into IPA ──
+          # Use gdown for reliable large file Google Drive downloads
+          pip3 install gdown --quiet
+          gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT"
+
+          echo "[✓] Downloaded: $(du -sh $OUTPUT | cut -f1)"
+
       - name: Inject Dylib into IPA
         script: |
           set -e
           cd $CM_BUILD_DIR
-
-          # Find the compiled dylib
           DYLIB_PATH=$(find . -name "MyTweak.dylib" | head -1)
           echo "[*] Found dylib: $DYLIB_PATH"
 
-          # Find the IPA (uploaded as artifact or placed in repo)
           IPA_PATH=$(find . -name "*.ipa" | grep -v patched | head -1)
           if [ -z "$IPA_PATH" ]; then
-              echo "[!] No IPA found. Upload an IPA to your repo root or uncomment the download step."
-              exit 1
+            echo "[!] No IPA found."
+            exit 1
           fi
           echo "[*] Target IPA: $IPA_PATH"
 
           chmod +x inject.sh
           bash inject.sh "$IPA_PATH" "$DYLIB_PATH"
 
-      # ── 6. Ad-hoc re-sign (no provisioning profile needed for sideloading) ──
       - name: Re-sign IPA (ad-hoc)
         script: |
           set -e
@@ -85,11 +102,9 @@ workflows:
           unzip -q "$PATCHED_IPA" -d "$WORK_DIR"
           APP_PATH=$(find "$WORK_DIR/Payload" -name "*.app" | head -1)
 
-          # Ad-hoc sign everything in the bundle
           find "$APP_PATH" \( -name "*.dylib" -o -name "*.framework" \) -exec codesign --force --sign - {} \;
           codesign --force --sign - --entitlements /dev/null "$APP_PATH"
 
-          # Repack
           IPA_NAME=$(basename "$PATCHED_IPA")
           cd "$WORK_DIR"
           zip -qr "${OLDPWD}/signed_${IPA_NAME}" Payload
