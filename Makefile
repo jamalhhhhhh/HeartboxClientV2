@@ -7,7 +7,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = MyTweak
 
 MyTweak_FILES = Tweak.x
-MyTweak_CFLAGS = -fobjc-arc
+MyTweak_CFLAGS = -fobjc-arc -Wno-arc-performSelector-leaks
 MyTweak_FRAMEWORKS = UIKit Foundation
 
 include $(THEOS)/makefiles/tweak.mk
